@@ -1,6 +1,10 @@
 # GUI-Independent segmentation module from EpiTools
 
-this repository contains the segmentation module from EpiTools-Matlab ([/src/src_analysis/module_segmentation](https://github.com/epitools/epitools-matlab/tree/master/src/src_analysis/module_segmentation)) with all the dependencies removed
+this repository contains the segmentation module from EpiTools-Matlab ([/src/src_analysis/module_segmentation](https://github.com/epitools/epitools-matlab/tree/master/src/src_analysis/module_segmentation)) with all the GUI dependencies removed.
+
+The main segmentation function can be found in `SegmentIm.m` which calls the c routines `findcellsfromregiongrowing.cc` and `growcellsfromseeds3.cc` for which all the compiled MEX files (win/lin/mac) are included as well.
+
+To know more about the segmentation routine check out our wiki page: [epitools.github.io/wiki/Analysis_Modules/03_segmentation/](https://epitools.github.io/wiki/Analysis_Modules/03_segmentation/) or the epitools article [http://dx.doi.org/10.1016/j.devcel.2015.12.012](http://dx.doi.org/10.1016/j.devcel.2015.12.012)
 
 # example execution
 
