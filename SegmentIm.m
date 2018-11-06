@@ -1,60 +1,36 @@
-function [CellSeeds ,CellLabels,ColIm] = SegmentIm(Im, params,CellSeeds)
+function [ColIm,CellLabels,CellSeeds] = SegmentIm(...
+    Im,...
+    sigma1, mincellsize, threshold,...
+    MergeCriteria,...
+    sigma3,...
+    LargeCellSizeThres,...
+    IBoundMax_pcnt,...
+    show)
 % SegmentIm segments a single frame extracting the cell outlines
-%
 % IN: 
-%   Im          - Image with high intensity membrane signal and low intensity cell background                                                               
-%   params      - mincellsize  : size of smallest cell expected
-%               - sigma1       : size of gaussian for smoothing image
-%               - sigma3       : size of gaussian for smoothing image
-%               - IBoundMax    : boundary parameter for merging
-%               - debug        : show more info for debugging
-%   Ilabel      - if you have a guess for the seeds, it goes here
+%   Im                  - [uint8] Image [increasing intesity for membrane]
+%   sigma1              - [0+]    size px of gaussian for smoothing image
+%   mincellsize         - [0+]    size px of smallest cell expected
+%   threshold           - [0-255] minimum value for membrane signal
+%   MergeCriteria       - [0-1]   minimum ratio of low intensity pxs upon which to merge cells
+%   sigma3              - [0+]    size px of gaussian for smoothing image
+%   LargeCellSizeThres  - [0+]    size px of largest cell expected
+%   IBoundMax_pcnt      - [0-1]   minimum ratio for seed and membrane intensity
+%   show                - [0/1]   show feedback for segmentation
 %
 % OUT: 
-%   Ilabel -> CellSeeds (uint8 - Rescaled Image to fit the range [0,252]
-%                        253/254/255 are used for seed information)
-%   Clabel -> CellLables (uint16 - bitmap of cells colored with 16bit id)
-%   ColIm  -> Colored image to store tracking information 
+%   CellSeeds           - [uint8] Rescaled Image to fit the range [0,252]
+%                                 253/254/255 are used for seed information
+%   CellLables          - [uint16] bitmap of cells colored with 16bit id
+%   ColIm               - [uint8] Im with seeds [255] and cell outlines [0]
 %
-% Author: Alexandre Tournier, Andreas Hoppe.
-% Copyright:
-
-if nargin < 2    % default parameters
-    show = false;
-    mincellsize=100;
-    sigma1=3.0;
-    sigma3 = 5;
-    IBoundMax = 30;
-else
-    show = params.debug;
-    mincellsize=params.mincellsize;
-    sigma1=params.sigma1;
-    sigma3=params.sigma3;
-    IBoundMax = params.IBoundMax;
-end
+% Author: Alexandre Tournier, Andreas Hoppe, Davide Heller, Lorenzo Gatti
+% Copyright: (2018) EpiTools Team
 
 ImSize=size(Im);
 
-%% Do we have initial seeding?
-if nargin > 2 % ok got seeds to start from!
-    % -------------------------------------------------------------------------
-    % Log current application status
-    log2dev('Initial seeding file found! ', 'DEBUG');
-    % -------------------------------------------------------------------------
-    GotStartingSeeds = true;
-else
-    
-    % -------------------------------------------------------------------------
-    % Log current application status
-    log2dev('Initial seeding file not found! *** Creating a new seeding file ', 'DEBUG');
-    % -------------------------------------------------------------------------
-    
-    GotStartingSeeds = false; 
-    
-    % Preallocating space for cell seeds 
-    CellSeeds = zeros(ImSize,'uint8');
-
-end
+% initialize seeding
+CellSeeds = zeros(ImSize,'uint8');
 
 %%
 Im = double(Im);
@@ -69,34 +45,74 @@ se = strel('disk',2);
 
 %% Operations
 
-% [0] Create starting seeds if not provide
-if ~GotStartingSeeds
-    
-    % Find the initial cell seeds (parameters: sigma1, threshold)
-    DoInitialSeeding();
-    if show  figure('Name','First seeding'); imshow(CellSeeds(:,:),[]);  end
-
-    % Remove initial cell regions which touch & whose boundary is insufficient
-    % (parameters: params.MergeCriteria)
-    MergeSeedsFromLabels() 
-    if show  figure('Name','Seeding after merging'); imshow(CellSeeds(:,:),[]); end
+% [0] Create starting seeds 
+% Find the initial cell seeds (parameters: sigma1, threshold)
+DoInitialSeeding();
+if show figure('Name','Intermediate steps'); end
+if show 
+    ax1 = subplot(4,6,[1 2 7 8]);
+    %p = get(h, 'pos');
+    %p(3) = p(3) - 0.05;
+    %set(h, 'pos', p);
+    imshow(CellSeeds(:,:),[]);
+    title(['[Seeds] smooth1='  num2str(sigma1) '; min.int=' num2str(threshold)]); 
 end
-
+    
+% Remove initial cell regions which touch & whose boundary is insufficient
+% (parameters: params.MergeCriteria)
+MergeSeedsFromLabels()
+if show 
+    ax2 = subplot(4,6,[5 6 11 12]);
+    imshow(CellSeeds(:,:),[]);
+    title(['[Merging] min.ratio.thr=' num2str(MergeCriteria)]);
+end
 
 % [1] Growing cells from seeds (parameter: sigma3) TODO: add paramters in Name description!
 GrowCellsInFrame()
-if show CreateColorBoundaries(); figure('Name','First cell boundaries'); imshow(ColIm,[]);  end
+if show 
+    CreateColorBoundaries(); 
+    ax3 = subplot(4,6,[13 14 19 20]); 
+    imshow(ColIm,[]); 
+    title(['[Boundaries] smooth2=' num2str(sigma3)]);   
+end
 
 % [2] Eliminate labels from seeds which have poor boundary intensity
 UnlabelPoorSeedsInFrame()
-if show CreateColorBoundaries(); figure('Name','Boundaries after poor cell removal'); imshow(ColIm,[]);  end
+%if show CreateColorBoundaries(); subplot(2,3,4); imshow(ColIm,[]); title('Cleaning');  end
 
 % [3] Seeds whose label has been eliminated are converted to NeutralSeeds (value=253)
 NeutralisePtsNotUnderLabelInFrame();
 
 % [4] Generate final colored image (RGB) to represent the segmentation results
 CreateColorBoundaries()
-%if show  figure('Name','Final cell boundaries'); imshow(ColIm,[]);  end
+if show
+    ax4 = subplot(4,6,[17 18 23 24]);
+    imshow(ColIm,[]); 
+    title(['[Final] boundary.thr=' num2str(IBoundMax_pcnt)]);
+    
+    linkaxes([ax1,ax2,ax3,ax4],'xy')
+    
+    % plot histogram in subplot(3,4,[2 3 4])
+    region_property = regionprops(CellLabels,'Area');
+    region_areas = cat(1,region_property.Area);
+    subplot(4,6,[3 4]);
+    hist(region_areas, 100);
+    xlabel('Area of cells');
+    
+    % add some general statistics
+    subplot(4,6,[21 22]);
+    description = {...
+        ['Cell.num = ' num2str(length(region_areas))],...
+        ['Avg.area = ' num2str(mean(region_areas))],...
+        ['Std.area = ' num2str(std(region_areas))],...
+        ['Min.area = ' num2str(min(region_areas)) ' [' num2str(mincellsize) ']'],...
+        ['Max.area = ' num2str(max(region_areas)) ' [' num2str(LargeCellSizeThres) ']' ]};
+    text(0,0.5,description); axis off
+
+    load('zerogreen','mycmap')
+    set(gcf, 'Colormap', mycmap)
+    
+end
 
 
 
@@ -104,36 +120,39 @@ CreateColorBoundaries()
 
     function CreateColorBoundaries()
         % create nice pic with colors for cells
+       
+%         cellBoundaries = zeros(ImSize,'uint8');
+%         ColIm = zeros([ImSize(1) ImSize(2) 3],'double');
+%         fs=fspecial('laplacian',0.9);
+%         cellBoundaries(:,:) = filter2(fs,CellLabels(:,:,1)) >.5;
+%         f1=fspecial( 'gaussian', [ImSize(1) ImSize(2)], sigma3);
+%         bw=double(CellSeeds(:,:) > 252); % find labels
+%         I1 = real(fftshift(ifft2(fft2(Im(:,:,1)).*fft2(f1))));
+%         Il = double(I1).*(1-bw)+255*bw; % mark labels on image
+%         ColIm(:,:,1) = double(Il)/255.;
+%         ColIm(:,:,2) = double(Il)/255.;
+%         ColIm(:,:,3) = double(Il)/255.;
+%         ColIm(:,:,1) = .7*double(cellBoundaries(:,:)) + ColIm(:,:,1).*(1-double(cellBoundaries(:,:)));
+%         ColIm(:,:,2) = .2*double(cellBoundaries(:,:)) + ColIm(:,:,2).*(1-double(cellBoundaries(:,:)));
+%         ColIm(:,:,3) = .2*double(cellBoundaries(:,:)) + ColIm(:,:,3).*(1-double(cellBoundaries(:,:)));
+%         ColIm = cast(ColIm*255, 'uint8');                 %todo: typecasting
+%     
+        %given that every cell has a different label
+        %we can compute the boundaries by computing 
+        %where the gradient changes
+        cell_lables = double(CellLabels(:,:));
+        [gx,gy] = gradient(cell_lables);
+        cell_outlines = (cell_lables > 0) & ((gx.^2+gy.^2)>0);
         
-        % -------------------------------------------------------------------------
-        % Log current application status
-        log2dev(sprintf('Generating color boundaries in current frame'), 'INFO');
-        % -------------------------------------------------------------------------
+        cell_seeds = CellSeeds(:,:) > 253;
+        
+        ColIm = Im;
+        ColIm(cell_outlines) = 0;
+        ColIm(cell_seeds) = 255;
 
-        cellBoundaries = zeros(ImSize,'uint8');
-        ColIm = zeros([ImSize(1) ImSize(2) 3],'double');
-        fs=fspecial('laplacian',0.9);
-        cellBoundaries(:,:) = filter2(fs,CellLabels(:,:,1)) >.5;
-        f1=fspecial( 'gaussian', [ImSize(1) ImSize(2)], sigma3);
-        bw=double(CellSeeds(:,:) > 252); % find labels
-        I1 = real(fftshift(ifft2(fft2(Im(:,:,1)).*fft2(f1))));
-        Il = double(I1).*(1-bw)+255*bw; % mark labels on image
-        ColIm(:,:,1) = double(Il)/255.;
-        ColIm(:,:,2) = double(Il)/255.;
-        ColIm(:,:,3) = double(Il)/255.;
-        ColIm(:,:,1) = .7*double(cellBoundaries(:,:)) + ColIm(:,:,1).*(1-double(cellBoundaries(:,:)));
-        ColIm(:,:,2) = .2*double(cellBoundaries(:,:)) + ColIm(:,:,2).*(1-double(cellBoundaries(:,:)));
-        ColIm(:,:,3) = .2*double(cellBoundaries(:,:)) + ColIm(:,:,3).*(1-double(cellBoundaries(:,:)));
-        %ColIm = cast(ColIm*255, 'uint8');                 %todo: typecasting
     end
 
     function DoInitialSeeding()
-        
-        % -------------------------------------------------------------------------
-        % Log current application status
-        log2dev('Generating initial seeding in current frame', 'INFO');
-        log2dev(sprintf('Minimal cell size = %i | Sigma 1 = %f',mincellsize,sigma1), 'DEBUG');
-        % -------------------------------------------------------------------------
  
         % Create gaussian filter
         if sigma1 > 0.01
@@ -149,7 +168,7 @@ CreateColorBoundaries()
         SmoothedIm = SmoothedIm/max(max(SmoothedIm))*252.;
         
         % Use external c-code to find initial seeds
-        InitialLabelling = findcellsfromregiongrowing(SmoothedIm , params.mincellsize, params.threshold);
+        InitialLabelling = findcellsfromregiongrowing(SmoothedIm , mincellsize, threshold);
         %if show  figure; imshow(InitialLabelling(:,:),[]); input('press <enter> to continue','s');  end
         
         InitialLabelling(InitialLabelling==1) = 0;  % set unallocated pixels to 0
@@ -185,11 +204,6 @@ CreateColorBoundaries()
 %     end
 
     function GrowCellsInFrame()
-        
-        % -------------------------------------------------------------------------
-        % Log current application status
-        log2dev(sprintf('Growing in-frame-cells in current frame'), 'INFO');
-        % -------------------------------------------------------------------------
 
         bw=double(CellSeeds(:,:) > 252); % find labels
         
@@ -207,11 +221,6 @@ CreateColorBoundaries()
 
     function UnlabelPoorSeedsInFrame()
         
-        % -------------------------------------------------------------------------
-        % Log current application status
-        log2dev(sprintf('Eliminating cell labels with insufficient boundary intensity'), 'INFO');
-        % -------------------------------------------------------------------------
-        
         L = CellLabels;
         
         if sigma3 > 0.01
@@ -224,11 +233,7 @@ CreateColorBoundaries()
         labelList = unique(L); %i.e. every cell is marked by one unique integer label 
         labelList = labelList(labelList~=0);
         IBounds = zeros(length(labelList),1);
-        
-        % -------------------------------------------------------------------------
-        % Log current application status
-        log2dev(sprintf('Found %i cells to anlayze', length(labelList)), 'DEBUG');
-        % -------------------------------------------------------------------------
+        decisions = [ 0 0 0 0 0 ];
         
         for c = 1:length(labelList)
             mask = L==labelList(c);
@@ -256,6 +261,9 @@ CreateColorBoundaries()
             [cpy cpx]=find(F2 > 252);
             ICentre = smoothedIm(cpy , cpx);
             
+            IBoundMax = 255 * IBoundMax_pcnt;
+            
+            
             %Figure out which conditions make the label invalid
             %1. IBoundMax, gives the Lower bound to the mean intensity
             %   1.b condition upon that the cell seed has less than 20% intensity difference to the mean
@@ -266,7 +274,7 @@ CreateColorBoundaries()
             %3. If the minimum retrieved in the boundary mask is 0 (dangerous!)
             third_condition = (min(boundaryIntensities)==0);
             %4. If the amount of low intensity signal (i.e. < 20) is more than 10% 
-            fourth_condition = (sum(H<20)/length(H) > 0.1);
+            fourth_condition = (sum(H<threshold)/length(H) > 0.1);
             if  first_condition...
                     || second_condition ...
                     || third_condition...
@@ -274,26 +282,35 @@ CreateColorBoundaries()
                 
                 %The label is cancelled (inverted mask multiplication.)
                 CellLabels = CellLabels.*uint16(mask==0);
+                
+                % record the removal decisions
+                if first_condition
+                    decisions(1) = decisions(1) + 1;
+                elseif second_condition
+                    decisions(2) = decisions(2) + 1;
+                elseif third_condition
+                    decisions(3) = decisions(3) + 1;
+                elseif fourth_condition
+                    decisions(4) = decisions(4) + 1;
+                else
+                    % should not happen
+                    decisions(5) = decisions(5) + 1;
+                end   
+                
             end
             
         end
         %The following debug figure shows the distribution of mean cell boundary intensity
         %if the threshold parameter IBoundMax is too high, valid cells might be delabeled
-        if show  
-            figure('Name','Histogram of cell boundary intensity');
-            hist(IBounds,100); 
-            xlabel('mean boundary intensity');
-            ylabel('percentage of cells');
-            input('press <enter> to continue','s');  
+        if show
+            subplot(4,6,[15 16]);
+            hist(IBounds/255,100); 
+            xlabel(['mean cell boundary strength -[' num2str(decisions) ']']);
+            % title(['[Cell boundary intensity] lower bound = ' num2str(IBoundMax_pcnt)]);
         end
     end
 
     function DelabelVeryLargeAreas()
-        
-        % -------------------------------------------------------------------------
-        % Log current application status
-        log2dev(sprintf('Eliminating cell exceding the threshold radius dimension'), 'INFO');
-        % -------------------------------------------------------------------------
         
         % remove cells which are bigger than LargeCellSizeThres
         L = CellLabels;
@@ -307,18 +324,11 @@ CreateColorBoundaries()
                 continue;
             end
             A = As(l);
-            if A > params.LargeCellSizeThres
+            if A > LargeCellSizeThres
                 L(L==l) = 0;
             end
         end
         dimFinalL = length(L);
-        
-        % -------------------------------------------------------------------------
-        % Log current application status
-        log2dev(sprintf('Radius = %0.2f | Initial cells = %i | Final cells = %i |',...
-                        params.LargeCellSizeThres, dimInitL, dimFinalL),...
-               'DEBUG');
-        % -------------------------------------------------------------------------
 
         CellLabels = L;
     end
@@ -335,16 +345,15 @@ CreateColorBoundaries()
         labelList = unique(CellLabels);
         labelList = labelList(labelList~=0);
         c = 1;
+        
+        merge_intensity_distro = [];
+        merge_decisions = 0;
+        
         % loop over labels
         while 1==1         
             labelMask = CellLabels==labelList(c);
             label = labelList(c);
             
-            % -------------------------------------------------------------------------
-            % Log current application status
-            log2dev(sprintf('Processing label %i',label), 'VERBOSE');
-            % -------------------------------------------------------------------------
-  
             [cpy cpx]=find(labelMask > 0);
              
             % find region of that label
@@ -411,22 +420,20 @@ CreateColorBoundaries()
             % the merge criteria in order to add it as a potential label in
             % the label set. 
             
+            merge_intensity_distro = [merge_intensity_distro; worst_intensity_ratio];
+            
             if ...
-                    worst_intensity_ratio > params.MergeCriteria && ...
+                    worst_intensity_ratio > MergeCriteria && ...
                     label~=0 && ...
                     neighbLabel~=0              
-                
-                % -------------------------------------------------------------------------
-                % Log current application status
-                log2dev(sprintf('Trying to merge label %i with value of %0.2f | ABOVE threshold of %0.2f',label,worst_intensity_ratio,params.MergeCriteria), 'DEBUG');
-                % -------------------------------------------------------------------------
-                
+ 
                 MergeLabels(label,neighbLabel);
                 labelList = unique(CellLabels);
                 labelList = labelList(labelList~=0);
                 c = c-1;                                                   % reanalyze the same cell for more 
                                                                            % possible mergings
-            
+                merge_decisions = merge_decisions + 1;
+                                                                           
             end
             
             c = c+1;
@@ -434,6 +441,14 @@ CreateColorBoundaries()
             % Condition to break the while cycle -> as soon as all the
             % labels are processed, then exit
             if c > length(labelList);  break;  end
+        end
+        
+        if show
+            % plot the distro
+            subplot(4,6,[9 10])
+            hist(merge_intensity_distro, 100);
+            xlabel(['ratio of low intensity boundary px (merges=' num2str(merge_decisions) ')']);
+            % ylabel('percentage of cells'); 
         end
         
     end
